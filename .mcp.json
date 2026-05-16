@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "hr-analytics": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "mcp-server",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "CUBE_API_URL": "http://localhost:4000/cubejs-api/v1",
+        "CUBE_API_SECRET": "${CUBE_API_SECRET}",
+        "DEMO_MANAGER_SCOPE": "Engineering"
+      }
+    }
+  }
+}

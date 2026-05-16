@@ -1,0 +1,35 @@
+cubes:
+  - name: employment_events
+    sql_table: public.employment_events
+
+    joins:
+      - name: employees
+        sql: "{CUBE}.employee_id = {employees}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+
+      - name: event_type
+        sql: event_type
+        type: string
+
+      - name: event_date
+        sql: event_date
+        type: time
+
+    measures:
+      - name: joiners
+        type: count
+        filters:
+          - sql: "{CUBE}.event_type = 'joined'"
+        description: Count of joiner events in the period.
+
+      - name: leaver_events
+        type: count
+        filters:
+          - sql: "{CUBE}.event_type = 'left'"
+        description: Count of leaver events in the period.

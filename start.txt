@@ -1,0 +1,80 @@
+ All six phases are built and the permissions audit passed. Here's what's runnable end-to-end:
+
+  How to run
+
+  # 1. Set your Anthropic API key for the API process (one of these):
+  copy .env.example .env
+  # or:  $env:ANTHROPIC_API_KEY = "sk-ant-..."
+
+  # 2. Start Postgres + Cube
+  docker compose up -d
+  # Wait ~10s for init scripts (schema → rls → seed) then verify:
+  # - http://localhost:4000 (Cube Playground) — try a query on manager_analytics
+  # - The "manager scope" needs the CUBE_API_SECRET; Playground works in dev mode
+
+  # 3. Backend
+  cd api
+  uv sync
+  uv run uvicorn main:app --reload --port 8000
+  # Health: http://localhost:8000/health  → anthropic_key_set: true
+
+  # 4. Frontend
+  cd web
+  npm install
+  npm run dev
+  # Open http://localhost:5173
+
+  What you can ask
+
+  The sidebar lets you pick a demo manager (Engineering / Sales / People). Each only sees their own team — that's enforced by the Cube queryRewrite (cube/cube.js) and Postgres RLS, never by the agent. Try:
+
+  1. "What's my team headcount?" → stat
+  2. "Show holiday days taken per person in 2025" → bar_chart
+  3. "Put that in a table instead" → same query, table view
+  4. Click a row → active_employee is set; ask "how many days have they taken?"
+  5. "Reset frame" button in the sidebar clears the active entity.
+
+  What's in the build
+
+
+  1. "What's my team headcount?" → stat
+  2. "Show holiday days taken per person in 2025" → bar_chart
+  3. "Put that in a table instead" → same query, table view
+  4. Click a row → active_employee is set; ask "how many days have they taken?"
+  5. "Reset frame" button in the sidebar clears the active entity.
+
+  What's in the build
+  The sidebar lets you pick a demo manager (Engineering / Sales / People). Each only sees their own team — that's enforced by the Cube queryRewrite (cube/cube.js) and Postgres  
+  RLS, never by the agent. Try:
+
+  1. "What's my team headcount?" → stat
+  2. "Show holiday days taken per person in 2025" → bar_chart
+  3. "Put that in a table instead" → same query, table view
+  4. Click a row → active_employee is set; ask "how many days have they taken?"
+  5. "Reset frame" button in the sidebar clears the active entity.
+
+  What's in the build
+
+  - db/ — schema (employees / teams / absences / employment_events / audit_log), RLS policies, seeded with 40 people across 3 teams and a year of absences. Two dedicated DB     
+  roles: cube_reader (SELECT, RLS applies) and api_writer (INSERT audit_log).
+  - cube/ — 3 cubes + a curated manager_analytics view. The view deliberately omits salary, date_of_birth, reason. queryRewrite fails closed if no scope is present.
+  - mcp-server/ — FastMCP server exposing describe_data_model and query_hr_metrics. Same tools also available in-process to the FastAPI agent (api/tools.py).
+  - api/ — FastAPI + Anthropic tool-use loop. Three tools to the model: describe_data_model, query_hr_metrics, submit_view (terminal). The model never sees raw SQL or scope.    
+  Schema-validated view spec via Pydantic. Audit log written on every query.
+  - web/ — Vite + React. Chat sidebar, context frame display + reset, Recharts/TanStack-table renderer. Row click on a table sets active_employee.
+
+  Things to be aware of
+
+  - .env.example contains a real API key. It's gitignored only as .env — if you're going to commit this repo, rotate that key and move it to .env (which is gitignored). I       
+  deliberately didn't touch the file since the change was flagged as intentional.
+  - The agent's MCP-server path vs. in-process path are duplicated. mcp-server/server.py is the canonical surface for Claude Code; api/tools.py is the same logic for the FastAPI
+   runtime to avoid a subprocess per request. They must stay in sync — worth extracting to a shared package later.
+  - active_team in the frame is a UI hint only. The actual Cube scope comes from the signed JWT, never from frame_update. The comment in api/agent.py documents this; the audit  
+  confirms it.
+
+  Want me to add a couple of pytest tests for the tool layer, or wire the MCP-server path properly so the FastAPI agent uses it instead of the in-process duplicate?
+
+✻ Churned for 25m 51s
+
+※ recap: Built the full conversational HR analytics app across all six phases, with the permissions audit passing. Next: copy .env.example to .env, then run docker compose up   
+  -d, the FastAPI backend, and the Vite frontend to try it. (disable recaps in /config)

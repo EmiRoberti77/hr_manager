@@ -1,0 +1,48 @@
+# The single surface the agent is allowed to query.
+#
+# Restricted fields are NOT listed here:
+#   - employees.salary
+#   - employees.date_of_birth
+#   - absences.reason
+# Excluding them at the view layer is how the app enforces rule 6 of CLAUDE.md
+# — the agent cannot ask for what is not in the catalogue.
+
+views:
+  - name: manager_analytics
+    description: Curated, manager-facing HR analytics surface.
+
+    cubes:
+      - join_path: employees
+        includes:
+          - full_name
+          - email
+          - team
+          - role
+          - start_date
+          - end_date
+          - location_city
+          - location_country
+          - latitude
+          - longitude
+          - salary_band
+          - headcount
+          - active_headcount
+          - leavers
+          - turnover_rate
+
+      - join_path: employees.absences
+        prefix: true
+        includes:
+          - absence_date
+          - absence_type
+          - total_absence_days
+          - holiday_days_taken
+          - sick_days_taken
+
+      - join_path: employees.employment_events
+        prefix: true
+        includes:
+          - event_type
+          - event_date
+          - joiners
+          - leaver_events

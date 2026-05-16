@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: hr-postgres
+    environment:
+      POSTGRES_DB: hr
+      POSTGRES_USER: hr
+      POSTGRES_PASSWORD: hr
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./db/rls.sql:/docker-entrypoint-initdb.d/02-rls.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hr -d hr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  cube:
+    image: cubejs/cube:latest
+    container_name: hr-cube
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CUBEJS_DEV_MODE: "true"
+      CUBEJS_DB_TYPE: postgres
+      CUBEJS_DB_HOST: postgres
+      CUBEJS_DB_PORT: 5432
+      CUBEJS_DB_NAME: hr
+      # Connect as cube_reader (created in rls.sql) so RLS still applies — the
+      # table owner ('hr') would bypass it. Cube's queryRewrite is the primary
+      # gate; RLS is the second line.
+      CUBEJS_DB_USER: cube_reader
+      CUBEJS_DB_PASS: cube
+      CUBEJS_API_SECRET: ${CUBE_API_SECRET:-dev-only-secret-change-me}
+      CUBEJS_SCHEMA_PATH: model
+      # Apply the manager security context as a SQL filter via queryRewrite (see cube.js).
+      CUBEJS_PG_SQL_PORT: 5433
+    ports:
+      - "4000:4000"
+      - "5433:5433"
+    volumes:
+      - ./cube/model:/cube/conf/model:ro
+      - ./cube/cube.js:/cube/conf/cube.js:ro
+
+volumes:
+  postgres_data:

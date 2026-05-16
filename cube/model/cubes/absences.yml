@@ -1,0 +1,44 @@
+cubes:
+  - name: absences
+    sql_table: public.absences
+
+    joins:
+      - name: employees
+        sql: "{CUBE}.employee_id = {employees}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+
+      - name: absence_date
+        sql: absence_date
+        type: time
+
+      - name: absence_type
+        sql: absence_type
+        type: string
+        # Note: the dimension is exposed, the *reason* column is not.
+
+      # Restricted: do NOT add `reason` here, and do NOT include it in the
+      # manager_analytics view. Sickness reasons are sensitive personal data
+      # and the model is the only safe place to gate them.
+
+    measures:
+      - name: total_absence_days
+        type: count
+        description: Total absence days of any type.
+
+      - name: holiday_days_taken
+        type: count
+        filters:
+          - sql: "{CUBE}.absence_type = 'holiday'"
+        description: Days taken as paid holiday.
+
+      - name: sick_days_taken
+        type: count
+        filters:
+          - sql: "{CUBE}.absence_type = 'sick'"
+        description: Days taken as sickness absence.

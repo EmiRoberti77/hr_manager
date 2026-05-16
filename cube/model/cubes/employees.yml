@@ -1,0 +1,112 @@
+cubes:
+  - name: employees
+    sql: >
+      SELECT
+        e.id,
+        e.full_name,
+        e.email,
+        e.role,
+        e.start_date,
+        e.end_date,
+        e.location_city,
+        e.location_country,
+        e.latitude,
+        e.longitude,
+        e.salary_band,
+        t.name AS team_name
+      FROM public.employees e
+      JOIN public.teams t ON t.id = e.team_id
+
+    joins:
+      - name: absences
+        sql: "{CUBE}.id = {absences}.employee_id"
+        relationship: one_to_many
+
+      - name: employment_events
+        sql: "{CUBE}.id = {employment_events}.employee_id"
+        relationship: one_to_many
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+
+      - name: full_name
+        sql: full_name
+        type: string
+
+      - name: email
+        sql: email
+        type: string
+
+      - name: team
+        sql: team_name
+        type: string
+
+      - name: role
+        sql: role
+        type: string
+
+      - name: start_date
+        sql: start_date
+        type: time
+
+      - name: end_date
+        sql: end_date
+        type: time
+
+      - name: location_city
+        sql: location_city
+        type: string
+        description: City where the employee is based.
+
+      - name: location_country
+        sql: location_country
+        type: string
+        description: Country where the employee is based.
+
+      - name: latitude
+        sql: "CAST(latitude AS FLOAT)"
+        type: number
+        description: Latitude of the employee's location (for map views).
+
+      - name: longitude
+        sql: "CAST(longitude AS FLOAT)"
+        type: number
+        description: Longitude of the employee's location (for map views).
+
+      - name: salary_band
+        sql: salary_band
+        type: string
+        description: "Broad pay band: Band A (<£55k), Band B (£55–75k), Band C (£75–95k), Band D (>£95k)."
+
+    segments:
+      - name: is_active
+        sql: "{CUBE}.end_date IS NULL"
+
+      - name: has_left
+        sql: "{CUBE}.end_date IS NOT NULL"
+
+    measures:
+      - name: headcount
+        type: count
+        description: Count of employees in the result set.
+
+      - name: active_headcount
+        type: count
+        filters:
+          - sql: "{CUBE}.end_date IS NULL"
+        description: Count of currently employed people.
+
+      - name: leavers
+        type: count
+        filters:
+          - sql: "{CUBE}.end_date IS NOT NULL"
+        description: Count of people who have left.
+
+      - name: turnover_rate
+        sql: "{leavers}::numeric / NULLIF({headcount}, 0)"
+        type: number
+        format: percent
+        description: Share of employees who have left over the cohort.
