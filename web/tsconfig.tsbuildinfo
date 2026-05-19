@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/chat.tsx","./src/mapview.tsx","./src/viewrenderer.tsx","./src/api.ts","./src/main.tsx"],"errors":true,"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/chat.tsx","./src/layout.tsx","./src/mapview.tsx","./src/policiespage.tsx","./src/router.tsx","./src/trainingpage.tsx","./src/viewrenderer.tsx","./src/youtubeembed.tsx","./src/api.ts","./src/main.tsx","./src/policiesapi.ts","./src/trainingapi.ts"],"version":"5.9.3"}

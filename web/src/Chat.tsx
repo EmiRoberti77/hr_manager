@@ -3,7 +3,7 @@
 // rendered view; clicking a name sets active_employee in the frame.
 
 import { useEffect, useRef, useState } from 'react';
-import type { ContextFrame, DemoUser } from './api';
+import type { ContextFrame } from './api';
 
 interface Turn {
   role: 'user' | 'assistant';
@@ -11,9 +11,6 @@ interface Turn {
 }
 
 interface Props {
-  demoUsers: DemoUser[];
-  demoUser: string;
-  setDemoUser: (u: string) => void;
   frame: ContextFrame | null;
   onResetFrame: () => void;
   turns: Turn[];
@@ -29,9 +26,6 @@ const SUGGESTIONS = [
 ];
 
 export function Chat({
-  demoUsers,
-  demoUser,
-  setDemoUser,
   frame,
   onResetFrame,
   turns,
@@ -60,17 +54,6 @@ export function Chat({
           Ask about headcount, holidays, joiners, individuals.
         </div>
       </header>
-
-      <div className="demo-user">
-        <label>Signed in as (demo)</label>
-        <select value={demoUser} onChange={(e) => setDemoUser(e.target.value)}>
-          {demoUsers.map((u) => (
-            <option key={u.email} value={u.email}>
-              {u.email} — {u.team}
-            </option>
-          ))}
-        </select>
-      </div>
 
       <div className="context-frame">
         <h2>Context frame</h2>

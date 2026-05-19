@@ -77,7 +77,9 @@ export function ViewRenderer({ spec, data, onRowClick }: Props) {
 
   function renderStat() {
     const y = view.y;
-    const value = y ? (data[0]?.[y] as number | string | undefined) : Object.values(data[0] ?? {})[0];
+    const raw = y ? data[0]?.[y] : Object.values(data[0] ?? {})[0];
+    const value =
+      typeof raw === 'string' || typeof raw === 'number' ? raw : undefined;
     return (
       <div style={{ textAlign: 'center', padding: 20 }}>
         <div className="stat-value">{value ?? '—'}</div>

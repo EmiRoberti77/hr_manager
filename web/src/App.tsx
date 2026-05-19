@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
   chat,
-  listDemoUsers,
   resetFrame,
   type ChatResponse,
   type ContextFrame,
-  type DemoUser,
   type ViewSpec,
 } from './api';
 import { Chat } from './Chat';
@@ -16,24 +14,17 @@ interface Turn {
   text: string;
 }
 
-export function App() {
-  const [demoUsers, setDemoUsers] = useState<DemoUser[]>([]);
-  const [demoUser, setDemoUser] = useState<string>('');
+interface Props {
+  demoUser: string;
+}
+
+export function App({ demoUser }: Props) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [frame, setFrame] = useState<ContextFrame | null>(null);
   const [viewSpec, setViewSpec] = useState<ViewSpec | null>(null);
   const [data, setData] = useState<Record<string, unknown>[]>([]);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [sending, setSending] = useState(false);
-
-  useEffect(() => {
-    listDemoUsers()
-      .then((users) => {
-        setDemoUsers(users);
-        if (users.length > 0) setDemoUser(users[0].email);
-      })
-      .catch((e) => console.error('Could not load demo users:', e));
-  }, []);
 
   // Switching demo users resets the chat so we don't leak one manager's
   // conversation into another's scope.
@@ -68,7 +59,6 @@ export function App() {
   }
 
   function handleRowClick(row: Record<string, unknown>) {
-    // Find a full_name-shaped column and use its value to set the active employee.
     const nameKey = Object.keys(row).find((k) => k.endsWith('.full_name') || k === 'full_name');
     if (!nameKey) return;
     const name = String(row[nameKey]);
@@ -86,9 +76,6 @@ export function App() {
   return (
     <div className="app">
       <Chat
-        demoUsers={demoUsers}
-        demoUser={demoUser}
-        setDemoUser={setDemoUser}
         frame={frame}
         onResetFrame={handleResetFrame}
         turns={turns}

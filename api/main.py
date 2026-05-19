@@ -21,6 +21,8 @@ load_dotenv(find_dotenv(usecwd=True))
 from agent import run_turn  # noqa: E402
 from auth import ManagerIdentity, get_manager, list_demo_users  # noqa: E402
 from context import store  # noqa: E402
+from policies import router as policies_router  # noqa: E402
+from training import router as training_router  # noqa: E402
 
 app = FastAPI(title="HR Analytics Sample API")
 
@@ -36,6 +38,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(training_router)
+app.include_router(policies_router)
 
 
 class ChatRequest(BaseModel):
@@ -59,6 +64,7 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "anthropic_key_set": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "openai_key_set": bool(os.environ.get("OPENAI_API_KEY")),
     }
 
 

@@ -15,8 +15,9 @@ This document explains how the code works: services, data flows, the Cube semant
 | View switching | “Put that in a table instead” → same query, different view |
 | Drill-down | Click a name in a table → follow-up about that person |
 | Geography | “Where is my team based?” → map with pins |
+| **HR Training** | Upload YouTube courses, assign to teams, track completion |
 
-Three demo managers (Engineering, Sales, People) each see **only their own team**. That restriction is enforced in the **data layer**, not by trusting the LLM.
+Three demo managers (Engineering, Sales, People) each see **only their own team** for analytics. **HR admin** (`hr.admin@example.com`) manages the training catalog and assignments.
 
 ---
 
@@ -504,6 +505,58 @@ Open [http://localhost:5173](http://localhost:5173).
 
 Try switching to **Tara (Sales)** or **Gemma (People)**—metrics only include that team’s rows.
 
+### Training migration (existing databases)
+
+Fresh `docker compose up` runs `db/migrations/001_training.sql` automatically. If Postgres was already initialized, apply the migration once:
+
+```bash
+docker exec -i hr-postgres psql -U hr -d hr < db/migrations/001_training.sql
+docker exec -i hr-postgres psql -U hr -d hr < db/migrations/002_hr_admin_employees_rls.sql
+```
+
+Or recreate the volume: `docker compose down -v && docker compose up -d`.
+
+### Training demo flow
+
+1. Sign in as **hr.admin@example.com** → **Training** tab.
+2. Create a course (e.g. “Enrollment basics”) and paste a YouTube URL.
+3. Assign the course to the **Engineering** team.
+4. Switch to **ava.thompson@example.com** → Training → see team enrollments, watch videos, mark **Start** / **Complete**.
+5. **tara.underwood@example.com** cannot create courses and does not see Engineering enrollments.
+
+---
+
+## HR Training module
+
+Training is a **separate vertical** from analytics: direct FastAPI CRUD + Postgres, not the agent or Cube.
+
+```mermaid
+flowchart LR
+    HRAdmin["hr.admin@example.com"]
+    Manager["Team manager"]
+    API["api/training.py"]
+    PG["training_* tables"]
+
+    HRAdmin -->|create courses, assign| API
+    Manager -->|view enrollments, update status| API
+    API --> PG
+```
+
+| Table | Purpose |
+|-------|---------|
+| `training_courses` | Course metadata (title, category, description) |
+| `training_videos` | YouTube links per course |
+| `training_enrollments` | Per-employee assignment + status |
+
+**Roles:**
+
+- **HR admin** — full CRUD on courses/videos; assign to any team or individuals.
+- **Managers** — view enrollments for their team only; update status (`not_started` → `in_progress` → `completed`).
+
+**Security:** Team scope for enrollments is enforced via Postgres RLS (`app.manager_team`) for managers and session flag `app.is_hr_admin` for HR admin. Training mutations are never exposed to the LLM.
+
+**API routes:** `GET/POST /training/courses`, `POST /training/courses/{id}/videos`, `POST /training/assignments`, `GET/PATCH /training/enrollments`, etc.
+
 ---
 
 ## Repository layout
@@ -515,7 +568,9 @@ hr_manager/
 ├── db/
 │   ├── schema.sql
 │   ├── rls.sql
-│   └── seed.sql
+│   ├── seed.sql
+│   └── migrations/
+│       └── 001_training.sql
 ├── cube/
 │   ├── cube.js            # queryRewrite security
 │   └── model/
@@ -526,10 +581,13 @@ hr_manager/
 │   ├── main.py            # HTTP routes
 │   ├── agent.py           # Anthropic tool loop
 │   ├── tools.py           # Cube client + audit (runtime)
-│   ├── auth.py            # Mock identity
+│   ├── auth.py            # Mock identity (+ HR admin)
 │   ├── context.py         # Conversation store + frame
+│   ├── training.py        # Training REST API
+│   ├── training_db.py     # Postgres access for training
+│   ├── youtube.py         # YouTube URL parser
 │   └── view_spec.py       # Pydantic schemas
-└── web/                   # React + Vite UI
+└── web/                   # React + Vite UI (Analytics + Training routes)
 ```
 
 ---

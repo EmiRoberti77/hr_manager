@@ -37,6 +37,7 @@ export interface ChatResponse {
 export interface DemoUser {
   email: string;
   team: string;
+  is_hr_admin?: boolean;
 }
 
 function headers(demoUser: string): HeadersInit {

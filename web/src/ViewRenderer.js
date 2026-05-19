@@ -40,7 +40,8 @@ export function ViewRenderer({ spec, data, onRowClick }) {
     }
     function renderStat() {
         const y = view.y;
-        const value = y ? data[0]?.[y] : Object.values(data[0] ?? {})[0];
+        const raw = y ? data[0]?.[y] : Object.values(data[0] ?? {})[0];
+        const value = typeof raw === 'string' || typeof raw === 'number' ? raw : undefined;
         return (_jsxs("div", { style: { textAlign: 'center', padding: 20 }, children: [_jsx("div", { className: "stat-value", children: value ?? '—' }), _jsx("div", { className: "stat-label", children: y ?? '' })] }));
     }
     function renderBar() {

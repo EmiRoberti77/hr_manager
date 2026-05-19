@@ -20,6 +20,7 @@ from fastapi import Header, HTTPException
 class ManagerIdentity:
     email: str
     team: str  # the single team this manager may see, e.g. "Engineering"
+    is_hr_admin: bool = False
 
 
 # Demo users — the only manager identities the sample knows about.
@@ -33,11 +34,17 @@ _DEMO_USERS: dict[str, ManagerIdentity] = {
     "gemma.hale@example.com": ManagerIdentity(
         email="gemma.hale@example.com", team="People"
     ),
+    "hr.admin@example.com": ManagerIdentity(
+        email="hr.admin@example.com", team="People", is_hr_admin=True
+    ),
 }
 
 
 def list_demo_users() -> list[dict]:
-    return [{"email": u.email, "team": u.team} for u in _DEMO_USERS.values()]
+    return [
+        {"email": u.email, "team": u.team, "is_hr_admin": u.is_hr_admin}
+        for u in _DEMO_USERS.values()
+    ]
 
 
 def get_manager(
@@ -54,3 +61,9 @@ def get_manager(
     if not user:
         raise HTTPException(status_code=401, detail=f"Unknown demo user: {x_demo_user}")
     return user
+
+
+def require_hr_admin(manager: ManagerIdentity) -> None:
+    """Raise 403 unless the caller is an HR admin."""
+    if not manager.is_hr_admin:
+        raise HTTPException(status_code=403, detail="HR admin access required")
