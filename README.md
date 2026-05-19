@@ -1,8 +1,14 @@
-# Conversational HR Analytics — Architecture & Guide
+# HR Platform — Architecture & Guide
 
-A sample web application where HR managers ask questions in plain language about their company—headcount, turnover, holidays, individual employees—and receive **dynamic charts and tables**. The system is **read-only**: the agent interprets intent and chooses queries; it never writes HR data or executes arbitrary SQL.
+A sample **HR platform** with three capabilities:
 
-This document explains how the code works: services, data flows, the Cube semantic layer, security boundaries, and the agent loop.
+1. **Analytics** — managers ask questions in plain language and receive dynamic charts, tables, and maps (Cube + agent).
+2. **Training** — HR admins publish YouTube-based courses and assign them to teams; managers track completion.
+3. **Policies** — HR admins upload team-scoped PDF handbooks; managers query them via a **RAG chatbot** with citations.
+
+Analytics is **read-only** (the agent never writes HR data or executes arbitrary SQL). Training and Policies use direct Postgres access with their own security models.
+
+This document explains how the code works: services, data flows, security boundaries, and each module’s architecture.
 
 ---
 
@@ -15,19 +21,52 @@ This document explains how the code works: services, data flows, the Cube semant
 | View switching | “Put that in a table instead” → same query, different view |
 | Drill-down | Click a name in a table → follow-up about that person |
 | Geography | “Where is my team based?” → map with pins |
-| **HR Training** | Upload YouTube courses, assign to teams, track completion |
+| **Training** | HR admin uploads YouTube courses, assigns to teams; managers watch and mark completion |
+| **Policies (RAG)** | HR admin uploads PDFs per team; managers ask “What is the holiday entitlement?” and get cited answers |
 
-Three demo managers (Engineering, Sales, People) each see **only their own team** for analytics. **HR admin** (`hr.admin@example.com`) manages the training catalog and assignments.
+Three demo managers (Engineering, Sales, People) each see **only their own team** for analytics and policy documents. **HR admin** (`hr.admin@example.com`) manages training and policy uploads across teams.
 
----
-
-## High-level architecture
-
-The stack has five layers. A prompt flows **down**; a rendered view flows **back up**.
+### Platform overview
 
 ```mermaid
 flowchart TB
-    subgraph UI["Web (React + Vite)"]
+    subgraph UI["Web — React + Vite (localhost:5173)"]
+        Analytics["/ — Chat + ViewRenderer"]
+        Training["/training — courses & enrollments"]
+        Policies["/policies — PDF library & RAG chat"]
+    end
+
+    subgraph API["FastAPI (localhost:8000)"]
+        Auth["auth.py — X-Demo-User → identity"]
+        Agent["agent.py — analytics tool loop"]
+        TrainAPI["training.py"]
+        PolicyAPI["policies.py"]
+    end
+
+    subgraph DataPaths["Data paths"]
+        Cube["Cube :4000 — semantic layer"]
+        PG["Postgres :5432 — HR + training + policies"]
+        OpenAI["OpenAI — embeddings"]
+        Claude["Anthropic — analytics + policy answers"]
+    end
+
+    Analytics --> Auth --> Agent --> Cube --> PG
+    Training --> Auth --> TrainAPI --> PG
+    Policies --> Auth --> PolicyAPI --> PG
+    PolicyAPI --> OpenAI
+    Agent --> Claude
+    PolicyAPI --> Claude
+```
+
+---
+
+## High-level architecture (Analytics)
+
+The analytics stack has five layers. A prompt flows **down**; a rendered view flows **back up**. Training and Policies are **separate** from this path (see sections below).
+
+```mermaid
+flowchart TB
+    subgraph UI["Web — Analytics route"]
         Chat["Chat.tsx — transcript, context frame"]
         VR["ViewRenderer.tsx — charts / tables / map"]
     end
@@ -49,7 +88,7 @@ flowchart TB
         Cubes["employees · absences · employment_events"]
     end
 
-    subgraph Data["PostgreSQL 16 (Docker)"]
+    subgraph Data["PostgreSQL 16 + pgvector (Docker)"]
         Tables["employees, teams, absences, …"]
         RLS["RLS policies (defence in depth)"]
         Audit["audit_log"]
@@ -79,11 +118,11 @@ flowchart TB
 
 | Service | Port | Role |
 |---------|------|------|
-| **PostgreSQL** | `5432` | HR data, RLS, `audit_log` |
+| **PostgreSQL** (`pgvector/pgvector:pg16`) | `5432` | HR data, training, policy chunks (vectors), RLS |
 | **Cube** | `4000` | REST API, Playground, query compilation |
 | **Cube SQL API** | `5433` | Optional direct SQL port (dev) |
-| **FastAPI** | `8000` | Chat, conversations, demo users |
-| **Vite (React)** | `5173` | UI; proxies `/chat`, etc. to FastAPI |
+| **FastAPI** | `8000` | Analytics chat, training, policies, demo users |
+| **Vite (React)** | `5173` | UI; proxies `/chat`, `/training`, `/policies` to FastAPI |
 
 ```mermaid
 flowchart LR
@@ -96,14 +135,17 @@ flowchart LR
     API -->|JWT + /load| Cube
     Cube -->|cube_reader| PG
     API -->|api_writer INSERT| PG
+    API -->|OpenAI embeddings| OpenAI["OpenAI API"]
 ```
 
 ### Docker Compose
 
 `docker-compose.yml` starts Postgres and Cube:
 
-- Postgres runs init scripts in order: `db/schema.sql` → `db/rls.sql` → `db/seed.sql` (~40 employees, 3 teams, a year of absences).
+- Postgres image: **`pgvector/pgvector:pg16`** (required for policy embeddings).
+- Init scripts in order: `db/schema.sql` → `db/rls.sql` → `db/seed.sql` → `db/migrations/001_training.sql` → `db/migrations/002_policies.sql` (~40 employees, sample training courses, empty policy library).
 - Cube mounts `cube/model/` and `cube/cube.js`, connects as **`cube_reader`** (not the table owner, so misconfiguration is visible).
+- Policy PDF files are stored on disk under `data/policy_uploads/` (gitignored); metadata and vectors live in Postgres.
 
 ---
 
@@ -195,9 +237,10 @@ flowchart TB
 **Sample only:** `X-Demo-User` maps to a fixed `ManagerIdentity` (email + team). Unknown or missing header → **401**, never a default “see all” user.
 
 ```text
-ava.thompson@example.com  → Engineering
+ava.thompson@example.com   → Engineering
 tara.underwood@example.com → Sales
 gemma.hale@example.com     → People
+hr.admin@example.com       → People (HR admin — training + policy uploads)
 ```
 
 **Production:** Replace with real SSO; scope comes from directory/HRIS, not env vars or headers the client can forge.
@@ -416,14 +459,19 @@ Switching demo user in the UI **clears** the conversation so one manager never i
 
 | File | Responsibility |
 |------|----------------|
-| `web/src/App.tsx` | Demo user, chat state, drill-down on row click |
+| `web/src/Router.tsx` | Routes: `/`, `/training`, `/policies` |
+| `web/src/Layout.tsx` | Top nav + demo user picker |
+| `web/src/App.tsx` | Analytics: chat state, drill-down on row click |
 | `web/src/Chat.tsx` | Transcript, context frame display, suggestions |
 | `web/src/ViewRenderer.tsx` | Maps view spec → Recharts / table / `MapView` |
-| `web/src/MapView.tsx` | Leaflet map (vanilla JS in `useEffect`, not react-leaflet) |
-| `web/src/api.ts` | Fetch wrapper + `X-Demo-User` header |
+| `web/src/TrainingPage.tsx` | Training UI |
+| `web/src/PoliciesPage.tsx` | Policy library + RAG chat |
+| `web/src/api.ts` | Analytics API client |
+| `web/src/trainingApi.ts` | Training API client |
+| `web/src/policiesApi.ts` | Policies API client |
 | `web/vite.config.ts` | Dev proxy to FastAPI |
 
-The frontend never talks to Cube directly. It only sees `view_spec` + `data` from the API.
+The analytics frontend never talks to Cube directly. It only sees `view_spec` + `data` from the API. Training and Policies call their own REST endpoints with the same `X-Demo-User` header.
 
 ---
 
@@ -463,9 +511,11 @@ cp .env.example .env
 
 | Variable | Purpose |
 |----------|---------|
-| `ANTHROPIC_API_KEY` | Agent loop |
+| `ANTHROPIC_API_KEY` | Analytics agent + policy RAG answers |
+| `OPENAI_API_KEY` | Policy document embeddings (`text-embedding-3-small`) |
 | `CUBE_API_SECRET` | Sign/verify scoped Cube JWTs (must match Docker) |
-| `AUDIT_DB_URL` | `postgresql://api_writer:api@localhost:5432/hr` |
+| `AUDIT_DB_URL` | `postgresql://api_writer:api@localhost:5432/hr` (audit, training, policies) |
+| `POLICY_UPLOAD_DIR` | Optional; defaults to `data/policy_uploads/` |
 
 ### 2. Infrastructure
 
@@ -482,7 +532,7 @@ uv sync
 uv run uvicorn main:app --reload --port 8000
 ```
 
-Health check: [http://localhost:8000/health](http://localhost:8000/health) (`anthropic_key_set: true`).
+Health check: [http://localhost:8000/health](http://localhost:8000/health) (`anthropic_key_set`, `openai_key_set`). Policy-specific: [http://localhost:8000/policies/health](http://localhost:8000/policies/health) (`pgvector_ok`).
 
 ### 4. Frontend
 
@@ -505,13 +555,15 @@ Open [http://localhost:5173](http://localhost:5173).
 
 Try switching to **Tara (Sales)** or **Gemma (People)**—metrics only include that team’s rows.
 
-### Training migration (existing databases)
+### Migrations (existing databases)
 
-Fresh `docker compose up` runs `db/migrations/001_training.sql` automatically. If Postgres was already initialized, apply the migration once:
+Fresh `docker compose up` runs all init scripts automatically. If Postgres was already initialized **before** training or policies were added, apply migrations manually (Postgres must have the **pgvector** extension — use the `pgvector/pgvector:pg16` image):
 
 ```bash
 docker exec -i hr-postgres psql -U hr -d hr < db/migrations/001_training.sql
 docker exec -i hr-postgres psql -U hr -d hr < db/migrations/002_hr_admin_employees_rls.sql
+docker exec -i hr-postgres psql -U hr -c "CREATE EXTENSION IF NOT EXISTS vector;"
+docker exec -i hr-postgres psql -U hr -d hr < db/migrations/002_policies.sql
 ```
 
 Or recreate the volume: `docker compose down -v && docker compose up -d`.
@@ -523,6 +575,14 @@ Or recreate the volume: `docker compose down -v && docker compose up -d`.
 3. Assign the course to the **Engineering** team.
 4. Switch to **ava.thompson@example.com** → Training → see team enrollments, watch videos, mark **Start** / **Complete**.
 5. **tara.underwood@example.com** cannot create courses and does not see Engineering enrollments.
+
+### Policies demo flow
+
+1. Sign in as **hr.admin@example.com** → **Policies** tab.
+2. Upload a text-based PDF (e.g. sickness or holiday policy), set **team** (e.g. Engineering) and **category**.
+3. Wait for status **ready** (background ingest: extract → chunk → embed).
+4. Switch to **ava.thompson@example.com** (Engineering) → ask *“What is the sickness absence policy?”* → answer with **Sources**.
+5. **tara.underwood@example.com** (Sales) does not retrieve Engineering policy chunks.
 
 ---
 
@@ -559,6 +619,101 @@ flowchart LR
 
 ---
 
+## Policy documents (RAG)
+
+Policies let managers query uploaded HR PDFs (holiday, expenses, travel, safety, etc.) in natural language. This module is **intentionally separate** from the Cube analytics agent: no view specs, no SQL from the LLM, no Cube path.
+
+```mermaid
+flowchart TB
+    subgraph Upload["Upload — HR admin only"]
+        UI1["PoliciesPage — multipart form"]
+        API1["POST /policies/documents"]
+        PDF["policy_ingest.py — pypdf extract"]
+        Chunk["tiktoken chunk ~500 tokens"]
+        Emb["OpenAI text-embedding-3-small"]
+        DB[(policy_documents + policy_chunks)]
+        UI1 --> API1 --> PDF --> Chunk --> Emb --> DB
+    end
+
+    subgraph Query["Query — any manager"]
+        UI2["PoliciesPage — chat panel"]
+        API2["POST /policies/chat"]
+        Ret["policy_rag.py — pgvector cosine search"]
+        LLM["Claude — answer + citations"]
+        Audit["policy_query_log"]
+        UI2 --> API2 --> Ret --> DB
+        Ret --> LLM
+        API2 --> Audit
+    end
+```
+
+### Policy chat sequence
+
+```mermaid
+sequenceDiagram
+    participant U as Manager (browser)
+    participant F as FastAPI
+    participant R as policy_rag.py
+    participant O as OpenAI
+    participant P as Postgres
+    participant C as Anthropic
+
+    U->>F: POST /policies/chat<br/>message, conversation_id
+    F->>F: get_manager() → team scope
+    F->>R: retrieve_chunks(query)
+    R->>O: embed query
+    O-->>R: vector
+    R->>P: SELECT … WHERE d.team = manager.team<br/>ORDER BY embedding <=> query
+    P-->>R: top-k chunks
+    R->>C: messages + policy excerpts
+    C-->>R: answer
+    R->>P: INSERT policy_chat_messages, policy_query_log
+    R-->>F: answer + sources
+    F-->>U: JSON response
+```
+
+### Data model
+
+| Table | Purpose |
+|-------|---------|
+| `policy_documents` | PDF metadata, `team`, `category`, `status` (`processing` / `ready` / `failed`) |
+| `policy_chunks` | Text segments + `vector(1536)` embedding |
+| `policy_chat_messages` | Per-conversation history (survives refresh) |
+| `policy_query_log` | Audit: who asked, team scope, chunk ids |
+
+### Security (team-scoped)
+
+```mermaid
+flowchart LR
+    subgraph Trusted["Trusted session"]
+        Auth["X-Demo-User → ManagerIdentity.team"]
+        Sess["SET LOCAL app.manager_team"]
+    end
+
+    subgraph Retrieval["Retrieval — fail closed"]
+        SQL["WHERE d.team = %s<br/>bound from manager.team only"]
+        RLS["RLS on documents + chunks"]
+    end
+
+    Auth --> Sess --> SQL --> RLS
+```
+
+| Rule | Implementation |
+|------|----------------|
+| Upload / delete | `require_hr_admin()` only |
+| Chat | Any manager; retrieval filtered by **their** team |
+| Team on upload | HR admin chooses team tag; does **not** widen search for other managers |
+| No LLM scope | Chat body has no `team` field for vector search |
+| Audit | Every `/policies/chat` writes `policy_query_log` |
+
+**API routes:** `GET /policies/documents`, `POST /policies/documents` (multipart PDF), `DELETE /policies/documents/{id}`, `POST /policies/chat`, `GET /policies/health`.
+
+**Code:** `api/policies.py`, `api/policies_db.py`, `api/policy_ingest.py`, `api/policy_rag.py`, `web/src/PoliciesPage.tsx`, `web/src/policiesApi.ts`.
+
+**Limits (v1):** text-based PDFs only (no OCR for scans); one team per document; no integration with the analytics chat on `/`.
+
+---
+
 ## Repository layout
 
 ```text
@@ -570,7 +725,9 @@ hr_manager/
 │   ├── rls.sql
 │   ├── seed.sql
 │   └── migrations/
-│       └── 001_training.sql
+│       ├── 001_training.sql
+│       ├── 002_policies.sql
+│       └── 002_hr_admin_employees_rls.sql
 ├── cube/
 │   ├── cube.js            # queryRewrite security
 │   └── model/
@@ -585,9 +742,15 @@ hr_manager/
 │   ├── context.py         # Conversation store + frame
 │   ├── training.py        # Training REST API
 │   ├── training_db.py     # Postgres access for training
+│   ├── policies.py        # Policy upload + RAG chat REST API
+│   ├── policies_db.py     # Postgres session vars for policy RLS
+│   ├── policy_ingest.py   # PDF extract, chunk, OpenAI embed
+│   ├── policy_rag.py      # Vector retrieval + Claude answers
 │   ├── youtube.py         # YouTube URL parser
 │   └── view_spec.py       # Pydantic schemas
-└── web/                   # React + Vite UI (Analytics + Training routes)
+├── data/
+│   └── policy_uploads/    # Uploaded PDFs (gitignored)
+└── web/                   # React + Vite (Analytics, Training, Policies)
 ```
 
 ---
@@ -597,7 +760,9 @@ hr_manager/
 | Area | Sample | Production |
 |------|--------|------------|
 | Auth | `X-Demo-User` header | SSO / session JWT |
-| Conversations | In-memory | Durable store |
+| Conversations | Analytics in-memory; policy chat in Postgres | Durable store everywhere |
+| Policy PDFs | Local disk `data/policy_uploads/` | Object storage (S3, etc.) |
+| Embeddings | OpenAI API | Managed embedding service / self-hosted |
 | MCP vs API tools | Duplicated modules | Shared package |
 | Secrets | `.env` (gitignored) | Secret manager, rotated keys |
 | Cube | `CUBEJS_DEV_MODE` | Hardened deployment, monitoring |
@@ -609,4 +774,4 @@ hr_manager/
 - **`CLAUDE.md`** — Build phases, contracts, non-negotiable rules.
 - **`.claude/skills/`** — `cube-data-model`, `agent-tools`, `permissions-audit` for detailed checklists when changing data access.
 
-For permissions changes, run the **permissions-audit** skill before merging anything under `db/`, `cube/`, `mcp-server/`, or `api/`.
+For permissions changes, run the **permissions-audit** skill before merging anything under `db/`, `cube/`, `mcp-server/`, or analytics agent code in `api/`. Policy and training modules use Postgres RLS and session-scoped team filters instead of Cube—verify scope never comes from LLM or client-supplied search parameters.
