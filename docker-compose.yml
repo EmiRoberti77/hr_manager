@@ -16,6 +16,7 @@ services:
       - ./db/migrations/001_training.sql:/docker-entrypoint-initdb.d/04-training.sql:ro
       - ./db/migrations/002_policies.sql:/docker-entrypoint-initdb.d/05-policies.sql:ro
       - ./db/migrations/002_hr_admin_employees_rls.sql:/docker-entrypoint-initdb.d/05-hr-admin-employees-rls.sql:ro
+      - ./db/migrations/003_expenses.sql:/docker-entrypoint-initdb.d/06-expenses.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hr -d hr"]
       interval: 5s

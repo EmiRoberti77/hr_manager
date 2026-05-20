@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { listDemoUsers, type DemoUser } from './api';
 import { App } from './App';
 import { Layout } from './Layout';
+import { ExpensesPage } from './ExpensesPage';
 import { PoliciesPage } from './PoliciesPage';
 import { TrainingPage } from './TrainingPage';
 
@@ -39,6 +40,10 @@ export function Root() {
           <Route
             path="/policies"
             element={<PoliciesPage demoUser={demoUser} demoUsers={demoUsers} />}
+          />
+          <Route
+            path="/expenses"
+            element={<ExpensesPage demoUser={demoUser} demoUsers={demoUsers} />}
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

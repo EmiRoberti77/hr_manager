@@ -1,12 +1,13 @@
 # HR Platform — Architecture & Guide
 
-A sample **HR platform** with three capabilities:
+A sample **HR platform** with four capabilities:
 
 1. **Analytics** — managers ask questions in plain language and receive dynamic charts, tables, and maps (Cube + agent).
 2. **Training** — HR admins publish YouTube-based courses and assign them to teams; managers track completion.
 3. **Policies** — HR admins upload team-scoped PDF handbooks; managers query them via a **RAG chatbot** with citations.
+4. **Expenses** — employees photograph receipts; Claude vision extracts line items; they review and submit expenses linked to their account.
 
-Analytics is **read-only** (the agent never writes HR data or executes arbitrary SQL). Training and Policies use direct Postgres access with their own security models.
+Analytics is **read-only** (the agent never writes HR data or executes arbitrary SQL). Training, Policies, and Expenses use direct Postgres access with their own security models.
 
 This document explains how the code works: services, data flows, security boundaries, and each module’s architecture.
 
@@ -23,8 +24,23 @@ This document explains how the code works: services, data flows, security bounda
 | Geography | “Where is my team based?” → map with pins |
 | **Training** | HR admin uploads YouTube courses, assigns to teams; managers watch and mark completion |
 | **Policies (RAG)** | HR admin uploads PDFs per team; managers ask “What is the holiday entitlement?” and get cited answers |
+| **Expenses** | Employee uploads receipt photo → LLM extracts items → review and submit |
 
-Three demo managers (Engineering, Sales, People) each see **only their own team** for analytics and policy documents. **HR admin** (`hr.admin@example.com`) manages training and policy uploads across teams.
+Demo **managers** (Engineering, Sales, People) see only their team for analytics and policies. **Employees** submit expenses from their phone. **HR admin** manages training and policy uploads across teams.
+
+### Demo accounts
+
+Pick a user from the header dropdown. `GET /demo-users` returns `role` and `employee_id` (linked to `employees.email` in the seed data).
+
+| Email | Team | Role | Can upload expenses |
+|-------|------|------|---------------------|
+| `ava.thompson@example.com` | Engineering | manager | Yes (also an employee record) |
+| `tara.underwood@example.com` | Sales | manager | Yes |
+| `gemma.hale@example.com` | People | manager | Yes |
+| `hr.admin@example.com` | People | hr_admin | No (view only) |
+| `chloe.davies@example.com` | Engineering | employee | Yes |
+| `umar.vance@example.com` | Sales | employee | Yes |
+| `maya.north@example.com` | People | employee | Yes |
 
 ### Platform overview
 
@@ -34,6 +50,7 @@ flowchart TB
         Analytics["/ — Chat + ViewRenderer"]
         Training["/training — courses & enrollments"]
         Policies["/policies — PDF library & RAG chat"]
+        Expenses["/expenses — receipt upload & review"]
     end
 
     subgraph API["FastAPI (localhost:8000)"]
@@ -41,21 +58,24 @@ flowchart TB
         Agent["agent.py — analytics tool loop"]
         TrainAPI["training.py"]
         PolicyAPI["policies.py"]
+        ExpAPI["expenses.py"]
     end
 
     subgraph DataPaths["Data paths"]
         Cube["Cube :4000 — semantic layer"]
-        PG["Postgres :5432 — HR + training + policies"]
-        OpenAI["OpenAI — embeddings"]
-        Claude["Anthropic — analytics + policy answers"]
+        PG["Postgres :5432 — HR + training + policies + expenses"]
+        OpenAI["OpenAI — policy embeddings"]
+        Claude["Anthropic — analytics + policy + receipt vision"]
     end
 
     Analytics --> Auth --> Agent --> Cube --> PG
     Training --> Auth --> TrainAPI --> PG
     Policies --> Auth --> PolicyAPI --> PG
+    Expenses --> Auth --> ExpAPI --> PG
     PolicyAPI --> OpenAI
     Agent --> Claude
     PolicyAPI --> Claude
+    ExpAPI --> Claude
 ```
 
 ---
@@ -121,8 +141,8 @@ flowchart TB
 | **PostgreSQL** (`pgvector/pgvector:pg16`) | `5432` | HR data, training, policy chunks (vectors), RLS |
 | **Cube** | `4000` | REST API, Playground, query compilation |
 | **Cube SQL API** | `5433` | Optional direct SQL port (dev) |
-| **FastAPI** | `8000` | Analytics chat, training, policies, demo users |
-| **Vite (React)** | `5173` | UI; proxies `/chat`, `/training`, `/policies` to FastAPI |
+| **FastAPI** | `8000` | Analytics chat, training, policies, expenses, demo users |
+| **Vite (React)** | `5173` | UI; proxies `/chat`, `/training`, `/policies`, `/expenses` to FastAPI |
 
 ```mermaid
 flowchart LR
@@ -143,9 +163,9 @@ flowchart LR
 `docker-compose.yml` starts Postgres and Cube:
 
 - Postgres image: **`pgvector/pgvector:pg16`** (required for policy embeddings).
-- Init scripts in order: `db/schema.sql` → `db/rls.sql` → `db/seed.sql` → `db/migrations/001_training.sql` → `db/migrations/002_policies.sql` (~40 employees, sample training courses, empty policy library).
+- Init scripts in order: `01-schema` → `02-rls` → `03-seed` → `04-training` → `05-policies` → `05-hr-admin-employees-rls` → `06-expenses` (see [`docker-compose.yml`](docker-compose.yml)).
 - Cube mounts `cube/model/` and `cube/cube.js`, connects as **`cube_reader`** (not the table owner, so misconfiguration is visible).
-- Policy PDF files are stored on disk under `data/policy_uploads/` (gitignored); metadata and vectors live in Postgres.
+- Upload directories (gitignored): `data/policy_uploads/` (PDFs), `data/expense_receipts/` (receipt photos).
 
 ---
 
@@ -237,11 +257,16 @@ flowchart TB
 **Sample only:** `X-Demo-User` maps to a fixed `ManagerIdentity` (email + team). Unknown or missing header → **401**, never a default “see all” user.
 
 ```text
-ava.thompson@example.com   → Engineering
-tara.underwood@example.com → Sales
-gemma.hale@example.com     → People
-hr.admin@example.com       → People (HR admin — training + policy uploads)
+ava.thompson@example.com   → Engineering (manager + employee)
+tara.underwood@example.com → Sales (manager + employee)
+gemma.hale@example.com     → People (manager + employee)
+hr.admin@example.com       → People (HR admin — no employee row)
+chloe.davies@example.com   → Engineering (employee)
+umar.vance@example.com   → Sales (employee)
+maya.north@example.com   → People (employee)
 ```
+
+Each request enriches identity with **`employee_id`** from `employees.email` ([`api/expenses_db.py`](api/expenses_db.py) `lookup_employee_id`). That lookup runs server-side only (uses a trusted HR-admin RLS session for the read — `api_writer` cannot otherwise see all employees).
 
 **Production:** Replace with real SSO; scope comes from directory/HRIS, not env vars or headers the client can forge.
 
@@ -459,19 +484,23 @@ Switching demo user in the UI **clears** the conversation so one manager never i
 
 | File | Responsibility |
 |------|----------------|
-| `web/src/Router.tsx` | Routes: `/`, `/training`, `/policies` |
-| `web/src/Layout.tsx` | Top nav + demo user picker |
+| `web/src/Router.tsx` | Routes: `/`, `/training`, `/policies`, `/expenses` |
+| `web/src/Layout.tsx` | Top nav + demo user picker (shows role) |
 | `web/src/App.tsx` | Analytics: chat state, drill-down on row click |
 | `web/src/Chat.tsx` | Transcript, context frame display, suggestions |
 | `web/src/ViewRenderer.tsx` | Maps view spec → Recharts / table / `MapView` |
 | `web/src/TrainingPage.tsx` | Training UI |
 | `web/src/PoliciesPage.tsx` | Policy library + RAG chat |
-| `web/src/api.ts` | Analytics API client |
+| `web/src/ExpensesPage.tsx` | Receipt upload (mobile camera), review, submit |
+| `web/src/api.ts` | Analytics API client + `DemoUser` type |
 | `web/src/trainingApi.ts` | Training API client |
 | `web/src/policiesApi.ts` | Policies API client |
+| `web/src/expensesApi.ts` | Expenses API client |
 | `web/vite.config.ts` | Dev proxy to FastAPI |
 
-The analytics frontend never talks to Cube directly. It only sees `view_spec` + `data` from the API. Training and Policies call their own REST endpoints with the same `X-Demo-User` header.
+The analytics frontend never talks to Cube directly. It only sees `view_spec` + `data` from the API. Training, Policies, and Expenses call their own REST endpoints with the same `X-Demo-User` header.
+
+**Note:** Edit the `.tsx` sources under `web/src/` — do not add parallel `.js` copies; Vite resolves `.js` before `.tsx` if both exist.
 
 ---
 
@@ -489,7 +518,16 @@ The analytics frontend never talks to Cube directly. It only sees `view_spec` + 
 
 ### Seed data (`db/seed.sql`)
 
-~40 employees across three teams with realistic absence and employment history for demos.
+~40 employees across three teams with realistic absence and employment history for demos. Demo login emails match employee rows where expenses are tested (e.g. `chloe.davies@example.com`).
+
+### Extension tables (migrations)
+
+| Migration | Adds |
+|-----------|------|
+| `001_training.sql` | `training_courses`, `training_videos`, `training_enrollments` |
+| `002_hr_admin_employees_rls.sql` | HR admin can read all `employees` (assignment fan-out) |
+| `002_policies.sql` | `policy_documents`, `policy_chunks` (pgvector), chat + audit tables |
+| `003_expenses.sql` | `expenses`, `expense_line_items` |
 
 ---
 
@@ -511,11 +549,12 @@ cp .env.example .env
 
 | Variable | Purpose |
 |----------|---------|
-| `ANTHROPIC_API_KEY` | Analytics agent + policy RAG answers |
+| `ANTHROPIC_API_KEY` | Analytics agent, policy RAG answers, receipt vision extraction |
 | `OPENAI_API_KEY` | Policy document embeddings (`text-embedding-3-small`) |
 | `CUBE_API_SECRET` | Sign/verify scoped Cube JWTs (must match Docker) |
-| `AUDIT_DB_URL` | `postgresql://api_writer:api@localhost:5432/hr` (audit, training, policies) |
+| `AUDIT_DB_URL` | `postgresql://api_writer:api@localhost:5432/hr` (audit, training, policies, expenses) |
 | `POLICY_UPLOAD_DIR` | Optional; defaults to `data/policy_uploads/` |
+| `EXPENSE_UPLOAD_DIR` | Optional; defaults to `data/expense_receipts/` |
 
 ### 2. Infrastructure
 
@@ -564,6 +603,7 @@ docker exec -i hr-postgres psql -U hr -d hr < db/migrations/001_training.sql
 docker exec -i hr-postgres psql -U hr -d hr < db/migrations/002_hr_admin_employees_rls.sql
 docker exec -i hr-postgres psql -U hr -c "CREATE EXTENSION IF NOT EXISTS vector;"
 docker exec -i hr-postgres psql -U hr -d hr < db/migrations/002_policies.sql
+docker exec -i hr-postgres psql -U hr -d hr < db/migrations/003_expenses.sql
 ```
 
 Or recreate the volume: `docker compose down -v && docker compose up -d`.
@@ -583,6 +623,14 @@ Or recreate the volume: `docker compose down -v && docker compose up -d`.
 3. Wait for status **ready** (background ingest: extract → chunk → embed).
 4. Switch to **ava.thompson@example.com** (Engineering) → ask *“What is the sickness absence policy?”* → answer with **Sources**.
 5. **tara.underwood@example.com** (Sales) does not retrieve Engineering policy chunks.
+
+### Expenses demo flow
+
+1. Sign in as **chloe.davies@example.com** (employee) → **Expenses**.
+2. Tap **Upload receipt**, take or select a photo → wait for `draft`.
+3. Review line items and total → **Confirm & submit**.
+4. Sign in as **ava.thompson@example.com** (manager) → see Chloe's submitted expense in the team list.
+5. **hr.admin@example.com** → sees all teams; cannot upload (no employee record).
 
 ---
 
@@ -714,6 +762,98 @@ flowchart LR
 
 ---
 
+## Employee expenses (receipt upload)
+
+Employees upload receipt **photos** from their phone (`<input capture="environment">` on mobile). Claude **vision** extracts merchant, date, line items, and total. The employee reviews the draft and submits; the expense is stored against their `employees` row.
+
+### Status workflow
+
+```mermaid
+stateDiagram-v2
+    [*] --> processing: POST /expenses/receipts
+    processing --> draft: Claude vision OK
+    processing --> failed: extract error
+    draft --> submitted: POST /expenses/id/submit
+    failed --> [*]: DELETE
+    draft --> [*]: DELETE
+    submitted --> [*]: read-only for managers
+```
+
+### End-to-end flow
+
+```mermaid
+sequenceDiagram
+    participant U as Employee (browser)
+    participant F as FastAPI
+    participant V as Claude vision
+    participant P as Postgres
+
+    U->>F: POST /expenses/receipts (multipart image)
+    F->>F: employee_id from session email
+    F->>P: INSERT expenses status=processing
+    F-->>U: 201 expense id
+
+    F->>V: extract_receipt (base64 image)
+    V-->>F: merchant, line_items, total
+    F->>P: UPDATE draft + expense_line_items
+
+    U->>F: PATCH /expenses/id (optional edits)
+    U->>F: POST /expenses/id/submit
+    F->>P: status=submitted
+```
+
+```mermaid
+flowchart TB
+    subgraph Upload["Upload — employee only"]
+        Phone["ExpensesPage — camera input"]
+        API["POST /expenses/receipts"]
+        Store["data/expense_receipts/"]
+        Vision["expense_extract.py — Claude vision"]
+        DB[(expenses + expense_line_items)]
+        Phone --> API --> Store --> Vision --> DB
+    end
+
+    subgraph Confirm["Review and submit"]
+        UI2["Edit line items + total"]
+        Submit["POST /expenses/id/submit"]
+        UI2 --> Submit --> DB
+    end
+    Vision --> UI2
+```
+
+### Data model
+
+| Table | Purpose |
+|-------|---------|
+| `expenses` | Receipt metadata, status, merchant, total, `extraction_raw` JSON |
+| `expense_line_items` | Itemized lines (description, qty, amount) |
+
+### Security
+
+| Rule | Implementation |
+|------|----------------|
+| Submit | `employee_id` resolved from session email → `employees` table; never from request body |
+| View own | RLS + `app.employee_id` session var |
+| Manager view | Team-scoped `SELECT` via `app.manager_team` |
+| HR admin | Full read via `app.is_hr_admin` |
+| Edit/submit | Own `draft` rows only; managers read-only |
+
+**API routes:** `GET /expenses`, `GET /expenses/{id}`, `POST /expenses/receipts`, `PATCH /expenses/{id}`, `POST /expenses/{id}/submit`, `DELETE /expenses/{id}`.
+
+**Code:** [`api/expenses.py`](api/expenses.py), [`api/expenses_db.py`](api/expenses_db.py), [`api/expense_extract.py`](api/expense_extract.py), [`web/src/ExpensesPage.tsx`](web/src/ExpensesPage.tsx), [`web/src/expensesApi.ts`](web/src/expensesApi.ts).
+
+**Limits (v1):** images only (JPEG/PNG/WebP, max 10 MB); no manager approval workflow; no PDF receipts; monetary amounts may serialize as strings in JSON — the UI normalizes them before display.
+
+### Troubleshooting (expenses)
+
+| Symptom | Fix |
+|---------|-----|
+| No **Upload receipt** button | Hard-refresh the page. Check `GET /demo-users` shows `employee_id` for your user. If null, apply `003_expenses.sql` and ensure Postgres is running. |
+| `relation "expenses" does not exist` | Run `db/migrations/003_expenses.sql` on the DB. |
+| Page crashes after upload | Ensure you are on `ExpensesPage.tsx` (not a stale `ExpensesPage.js`). Amounts from the API are coerced with `formatAmount()`. |
+
+---
+
 ## Repository layout
 
 ```text
@@ -727,7 +867,8 @@ hr_manager/
 │   └── migrations/
 │       ├── 001_training.sql
 │       ├── 002_policies.sql
-│       └── 002_hr_admin_employees_rls.sql
+│       ├── 002_hr_admin_employees_rls.sql
+│       └── 003_expenses.sql
 ├── cube/
 │   ├── cube.js            # queryRewrite security
 │   └── model/
@@ -738,7 +879,7 @@ hr_manager/
 │   ├── main.py            # HTTP routes
 │   ├── agent.py           # Anthropic tool loop
 │   ├── tools.py           # Cube client + audit (runtime)
-│   ├── auth.py            # Mock identity (+ HR admin)
+│   ├── auth.py            # Mock identity, roles, employee_id lookup
 │   ├── context.py         # Conversation store + frame
 │   ├── training.py        # Training REST API
 │   ├── training_db.py     # Postgres access for training
@@ -746,11 +887,15 @@ hr_manager/
 │   ├── policies_db.py     # Postgres session vars for policy RLS
 │   ├── policy_ingest.py   # PDF extract, chunk, OpenAI embed
 │   ├── policy_rag.py      # Vector retrieval + Claude answers
+│   ├── expenses.py        # Expense upload + review REST API
+│   ├── expenses_db.py     # Postgres session vars for expense RLS
+│   ├── expense_extract.py # Claude vision receipt parsing
 │   ├── youtube.py         # YouTube URL parser
 │   └── view_spec.py       # Pydantic schemas
 ├── data/
-│   └── policy_uploads/    # Uploaded PDFs (gitignored)
-└── web/                   # React + Vite (Analytics, Training, Policies)
+│   ├── policy_uploads/    # Uploaded PDFs (gitignored)
+│   └── expense_receipts/  # Receipt images (gitignored)
+└── web/                   # React + Vite (Analytics, Training, Policies, Expenses)
 ```
 
 ---
@@ -762,6 +907,7 @@ hr_manager/
 | Auth | `X-Demo-User` header | SSO / session JWT |
 | Conversations | Analytics in-memory; policy chat in Postgres | Durable store everywhere |
 | Policy PDFs | Local disk `data/policy_uploads/` | Object storage (S3, etc.) |
+| Receipt images | Local disk `data/expense_receipts/` | Object storage (S3, etc.) |
 | Embeddings | OpenAI API | Managed embedding service / self-hosted |
 | MCP vs API tools | Duplicated modules | Shared package |
 | Secrets | `.env` (gitignored) | Secret manager, rotated keys |
@@ -774,4 +920,4 @@ hr_manager/
 - **`CLAUDE.md`** — Build phases, contracts, non-negotiable rules.
 - **`.claude/skills/`** — `cube-data-model`, `agent-tools`, `permissions-audit` for detailed checklists when changing data access.
 
-For permissions changes, run the **permissions-audit** skill before merging anything under `db/`, `cube/`, `mcp-server/`, or analytics agent code in `api/`. Policy and training modules use Postgres RLS and session-scoped team filters instead of Cube—verify scope never comes from LLM or client-supplied search parameters.
+For permissions changes, run the **permissions-audit** skill before merging anything under `db/`, `cube/`, `mcp-server/`, or analytics agent code in `api/`. Policy, training, and expense modules use Postgres RLS and session-scoped filters instead of Cube—verify scope never comes from LLM or client-supplied parameters.

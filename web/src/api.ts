@@ -38,6 +38,9 @@ export interface DemoUser {
   email: string;
   team: string;
   is_hr_admin?: boolean;
+  is_manager?: boolean;
+  role?: 'hr_admin' | 'manager' | 'employee';
+  employee_id?: number | null;
 }
 
 function headers(demoUser: string): HeadersInit {

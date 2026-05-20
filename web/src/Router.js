@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { listDemoUsers } from './api';
 import { App } from './App';
 import { Layout } from './Layout';
+import { ExpensesPage } from './ExpensesPage';
 import { PoliciesPage } from './PoliciesPage';
 import { TrainingPage } from './TrainingPage';
 export function Root() {
@@ -21,5 +22,5 @@ export function Root() {
     if (!demoUser && demoUsers.length === 0) {
         return _jsx("div", { className: "empty", children: "Loading\u2026" });
     }
-    return (_jsx(BrowserRouter, { children: _jsx(Routes, { children: _jsxs(Route, { element: _jsx(Layout, { demoUsers: demoUsers, demoUser: demoUser, setDemoUser: setDemoUser }), children: [_jsx(Route, { path: "/", element: _jsx(App, { demoUser: demoUser }) }), _jsx(Route, { path: "/training", element: _jsx(TrainingPage, { demoUser: demoUser, demoUsers: demoUsers }) }), _jsx(Route, { path: "/policies", element: _jsx(PoliciesPage, { demoUser: demoUser, demoUsers: demoUsers }) }), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/", replace: true }) })] }) }) }));
+    return (_jsx(BrowserRouter, { children: _jsx(Routes, { children: _jsxs(Route, { element: _jsx(Layout, { demoUsers: demoUsers, demoUser: demoUser, setDemoUser: setDemoUser }), children: [_jsx(Route, { path: "/", element: _jsx(App, { demoUser: demoUser }) }), _jsx(Route, { path: "/training", element: _jsx(TrainingPage, { demoUser: demoUser, demoUsers: demoUsers }) }), _jsx(Route, { path: "/policies", element: _jsx(PoliciesPage, { demoUser: demoUser, demoUsers: demoUsers }) }), _jsx(Route, { path: "/expenses", element: _jsx(ExpensesPage, { demoUser: demoUser, demoUsers: demoUsers }) }), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/", replace: true }) })] }) }) }));
 }

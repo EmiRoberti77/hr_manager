@@ -25,6 +25,9 @@ export function Layout({ demoUsers, demoUser, setDemoUser }: Props) {
           <Link to="/policies" className={location.pathname.startsWith('/policies') ? 'active' : ''}>
             Policies
           </Link>
+          <Link to="/expenses" className={location.pathname.startsWith('/expenses') ? 'active' : ''}>
+            Expenses
+          </Link>
         </nav>
         <div className="top-nav-user">
           <label htmlFor="demo-user-select">Signed in as</label>
@@ -36,7 +39,7 @@ export function Layout({ demoUsers, demoUser, setDemoUser }: Props) {
             {demoUsers.map((u) => (
               <option key={u.email} value={u.email}>
                 {u.email} — {u.team}
-                {u.is_hr_admin ? ' (HR admin)' : ''}
+                {u.role === 'hr_admin' ? ' (HR admin)' : u.role === 'employee' ? ' (employee)' : ''}
               </option>
             ))}
           </select>

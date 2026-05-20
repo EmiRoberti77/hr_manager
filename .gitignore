@@ -13,3 +13,4 @@ build/
 .ruff_cache/
 .mypy_cache/
 data/policy_uploads/
+data/expense_receipts/
